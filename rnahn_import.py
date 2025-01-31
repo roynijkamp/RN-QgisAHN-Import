@@ -24,7 +24,8 @@
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QThread, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox, QProgressDialog
-from qgis.core import QgsRasterLayer, QgsVectorLayer, QgsProject, QgsRasterLayer, QgsMapLayer
+from qgis.core import QgsRasterLayer, QgsVectorLayer, QgsProject, QgsRasterLayer, QgsMapLayer, QgsProcessingFeedback, QgsProcessingAlgorithm
+from osgeo import gdal
 import json
 import os
 import requests
@@ -276,33 +277,56 @@ class RNahnImport:
 
 
     def merge_rasters(self):
-        from qgis.core import QgsProject, QgsRasterLayer
-        import processing
-        import os
-        """Voegt alle rasterlagen in het project samen tot één bestand."""
+        """ Merge meerdere rasterlagen tot één, of retourneer de enige laag als er maar één is. """
+        
+        # Haal alle rasterlagen op uit het QGIS-project
         raster_layers = [layer for layer in QgsProject.instance().mapLayers().values() if isinstance(layer, QgsRasterLayer)]
 
-        if len(raster_layers) < 2:
-            print("Niet genoeg rasterlagen om samen te voegen.")
+        # Als er geen rasterlagen zijn, return None
+        if not raster_layers:
+            print("Geen rasterlagen gevonden!")
             return None
 
-        # Output bestandspad
-        output_path = os.path.join(os.path.expanduser("~"), "merged.tif")
+        # Als er maar 1 rasterlaag is, return die laag direct
+        if len(raster_layers) == 1:
+            print("🔹 Slechts 1 rasterlaag gevonden, geen merge nodig.")
+            return raster_layers[0]
 
-        # Voer het merge-proces uit
-        processing.run("gdal:merge", {
-            "INPUT": [layer.source() for layer in raster_layers],  # Alle rasterbestanden als input
-            "OUTPUT": output_path
-        })
+        # Meerdere rasterlagen: uitvoeren van de merge
+        print(f"🔄 {len(raster_layers)} rasterlagen gevonden, starten met merge...")
 
-        # Voeg de samengevoegde laag toe aan QGIS
-        merged_layer = QgsRasterLayer(output_path, "Samengevoegd Raster")
-        if merged_layer.isValid():
-            QgsProject.instance().addMapLayer(merged_layer)
-            return merged_layer
-        else:
-            print("Fout bij het maken van de samengevoegde rasterlaag.")
+        # Paden van rasterlagen ophalen
+        input_layers = [layer.source() for layer in raster_layers]
+
+        # Instellingen voor de processing tool 'gdal:merge'
+        merge_params = {
+            "INPUT": input_layers,
+            "PCT": False,
+            "SEPARATE": False,
+            "NODATA_INPUT": None,
+            "NODATA_OUTPUT": None,
+            "OPTIONS": "",
+            "EXTRA": "",
+            "DATA_TYPE": 0,  # Zelfde datatype als invoer
+            "OUTPUT": "TEMPORARY_OUTPUT"
+        }
+
+        # Processing uitvoeren
+        feedback = QgsProcessingFeedback()
+        result = processing.run("gdal:merge", merge_params, feedback=feedback)
+
+        # Controleren of het gelukt is
+        merged_path = result["OUTPUT"]
+        if not merged_path:
+            print("Merge is mislukt!")
             return None
+
+        # Toevoegen aan QGIS-project
+        merged_layer = QgsRasterLayer(merged_path, "Merged Raster", "gdal")
+        QgsProject.instance().addMapLayer(merged_layer)
+
+        print("Merge voltooid!")
+        return merged_layer
 
     def ensure_polygon_layer(self, vector_layer):
         """Controleert of de vectorlaag een polygonlaag is en converteert deze indien nodig."""
@@ -389,6 +413,33 @@ class RNahnImport:
                 if tree_layer:
                     tree_layer.setItemVisibilityChecked(False)  # Zet de laag uit
 
+    def export_raster(self, raster_layer):
+        """ Laat de gebruiker een opslaglocatie kiezen en exporteert de rasterlaag als GeoTIFF met GDAL. """
+        if not raster_layer:
+            print("Geen rasterlaag om te exporteren!")
+            return
+
+        # Open een bestandskiezer voor de opslaglocatie
+        file_path, _ = QFileDialog.getSaveFileName(None, "Opslaan als", "", "GeoTIFF (*.tif)")
+
+        # Als de gebruiker annuleert, stoppen
+        if not file_path:
+            print("Export geannuleerd door gebruiker.")
+            return
+
+        # Huidige rasterbron ophalen als GDAL Dataset
+        raster_path = raster_layer.source()
+        gdal_dataset = gdal.Open(raster_path)
+
+        if not gdal_dataset:
+            print("Kan rasterbron niet openen met GDAL!")
+            return
+
+        # Gebruik GDAL om het raster naar de gekozen locatie te exporteren
+        gdal.Translate(file_path, gdal_dataset, format="GTiff")
+
+        print(f"Rasterlaag succesvol opgeslagen als: {file_path}")
+
     def run(self):
         """Run method that performs all the real work"""
 
@@ -463,13 +514,23 @@ class ProcessingWorker(QThread):
         self.progress_updated.emit(80)
 
         # Stap 5: Clippen op contour
+        clipped_layer = None
         if merged_layer and vector_layer:
             self.task_updated.emit("Clippen op contour...")
-            self.parent.clip_raster(merged_layer, vector_layer)
-            self.progress_updated.emit(100)
+            clipped_layer = self.parent.clip_raster(merged_layer, vector_layer)
+            self.progress_updated.emit(90)
         else:
             self.task_updated.emit("Clippen overgeslagen (geen contourlaag gevonden)")
 
+        # Stap 6: Exporteren naar GeoTIFF
+        if clipped_layer:
+            self.task_updated.emit("Exporteren als GeoTIFF...")
+            self.parent.export_raster(clipped_layer)
+            self.progress_updated.emit(100)
+            self.task_updated.emit(f"Klaar! Export voltooid")
+        else:
+            self.task_updated.emit("Klaar! Export overgeslagen (geen geclipte laag)")
+
+
         # Verwerking voltooid
-        self.task_updated.emit("Klaar!")
         self.finished.emit()       
