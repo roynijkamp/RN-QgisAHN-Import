@@ -195,6 +195,11 @@ class RNahnImport:
         if not json_path:
             return
 
+        # Bewaar het pad voor later gebruik
+        self.last_directory = json_path.rsplit("/", 1)[0]  # Alleen de map opslaan (zonder bestandsnaam)
+
+        print(f"📂 Laatst gebruikte map opgeslagen: {self.last_directory}")
+
         # Probeer het JSON-bestand te laden
         try:
             with open(json_path, 'r') as file:
@@ -307,7 +312,7 @@ class RNahnImport:
             "NODATA_OUTPUT": None,
             "OPTIONS": "",
             "EXTRA": "",
-            "DATA_TYPE": 0,  # Zelfde datatype als invoer
+            "DATA_TYPE": 5,  # Zelfde datatype als invoer (0)
             "OUTPUT": "TEMPORARY_OUTPUT"
         }
 
@@ -419,8 +424,12 @@ class RNahnImport:
             print("Geen rasterlaag om te exporteren!")
             return
 
-        # Open een bestandskiezer voor de opslaglocatie
-        file_path, _ = QFileDialog.getSaveFileName(None, "Opslaan als", "", "GeoTIFF (*.tif)")
+         # Gebruik de laatst gekozen directory, of standaard de home directory
+        start_dir = self.last_directory if hasattr(self, 'last_directory') else ""
+    
+        # Open bestandskiezer in de laatst gebruikte map
+        file_path, _ = QFileDialog.getSaveFileName(None, "Opslaan als", start_dir, "GeoTIFF (*.tif)")
+
 
         # Als de gebruiker annuleert, stoppen
         if not file_path:
