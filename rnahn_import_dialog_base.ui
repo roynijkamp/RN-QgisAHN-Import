@@ -121,8 +121,11 @@
      <x>80</x>
      <y>210</y>
      <width>301</width>
-     <height>16</height>
+     <height>13</height>
     </rect>
+   </property>
+   <property name="mouseTracking">
+    <bool>false</bool>
    </property>
    <property name="text">
     <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;--&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
